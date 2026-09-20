@@ -1,0 +1,8 @@
+"use client";
+import { useEffect, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import { useAuth } from "@/components/auth-provider";
+import { getSupabaseBrowserClient } from "@/lib/supabase/client";
+import { ListingForm } from "@/components/listing-form";
+import type { Listing } from "@/lib/data";
+export default function EditListing() { const { user, loading: authLoading } = useAuth(); const params = useParams<{ id: string }>(); const router = useRouter(); const [listing, setListing] = useState<Listing | null>(null); const [loading, setLoading] = useState(true); const [error, setError] = useState(""); useEffect(() => { if (!authLoading && !user) { router.replace(`/login?next=/sell/${params.id}/edit`); return; } if (user) getSupabaseBrowserClient().from("listings").select("*").eq("id", params.id).eq("seller_id", user.id).single().then(({ data, error: queryError }) => { if (queryError) setError("Listing not found or you do not own it."); else setListing(data as Listing); setLoading(false); }); }, [authLoading, user, params.id, router]); if (authLoading || loading) return <main className="mx-auto max-w-3xl px-5 py-24 text-center text-zinc-500">Loading listing...</main>; if (error || !listing) return <main className="mx-auto max-w-3xl px-5 py-24 text-center text-zinc-400">{error || "Listing unavailable."}</main>; return <main className="mx-auto max-w-3xl px-5 py-14"><p className="text-xs font-bold uppercase tracking-[.2em] text-electric">Seller hub</p><h1 className="mt-3 text-5xl font-semibold tracking-tight">Edit listing.</h1><p className="mt-4 text-zinc-400">Update your listing details and visibility.</p><ListingForm listing={listing} mode="edit" /></main>; }
