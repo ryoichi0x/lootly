@@ -2,6 +2,71 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
-import { Button } from "@/components/layout";
-import type { Profile } from "@/lib/data";
-export default function ProfilePage() { const { user, loading: authLoading } = useAuth(); const [profile, setProfile] = useState<Profile | null>(null); const [active, setActive] = useState(0); const [sold, setSold] = useState(0); const [avatar, setAvatar] = useState<File | null>(null); const [preview, setPreview] = useState(""); const [saving, setSaving] = useState(false); const [error, setError] = useState(""); const [message, setMessage] = useState(""); useEffect(() => { if (!user) return; getSupabaseBrowserClient().from("profiles").select("*").eq("id", user.id).single().then(({ data }) => { setProfile(data as Profile); setPreview(data?.avatar_url || ""); }); getSupabaseBrowserClient().from("listings").select("status").eq("seller_id", user.id).then(({ data }) => { setActive(data?.filter(x => x.status === "active").length || 0); setSold(data?.filter(x => x.status === "sold").length || 0); }); }, [user]); if (authLoading || !user || !profile) return <main className="mx-auto max-w-2xl px-5 py-24 text-center text-zinc-500">Loading your profile...</main>; async function save(event: React.FormEvent<HTMLFormElement>) { event.preventDefault(); setSaving(true); setError(""); setMessage(""); const form = new FormData(event.currentTarget); let avatarUrl = profile.avatar_url; const supabase = getSupabaseBrowserClient(); if (avatar) { if (avatar.size > 5 * 1024 * 1024) { setError("Avatar must be smaller than 5MB."); setSaving(false); return; } const path = `${user.id}/${crypto.randomUUID()}-${avatar.name.replace(/[^a-zA-Z0-9._-]/g, "")}`; const upload = await supabase.storage.from("avatars").upload(path, avatar); if (upload.error) { setError(upload.error.message); setSaving(false); return; } avatarUrl = supabase.storage.from("avatars").getPublicUrl(path).data.publicUrl; } const username = String(form.get("username")).trim(); const bio = String(form.get("bio") || "").trim(); if (username.length < 3 || username.length > 40 || bio.length > 500) { setError("Username must be 3–40 characters and bio must be under 500 characters."); setSaving(false); return; } const { data, error: updateError } = await supabase.from("profiles").update({ username, bio, avatar_url: avatarUrl }).eq("id", user.id).select().single(); if (updateError) setError(updateError.message); else { setProfile(data as Profile); setPreview(avatarUrl || ""); setMessage("Profile saved."); } setSaving(false); } return <main className="mx-auto max-w-2xl px-5 py-14"><p className="text-xs font-bold uppercase tracking-[.2em] text-electric">Your identity</p><h1 className="mt-3 text-5xl font-semibold tracking-tight">Profile.</h1><p className="mt-4 text-zinc-400">Make your seller profile yours.</p><form onSubmit={save} className="mt-10 space-y-7 rounded-2xl border border-line bg-panel p-6 sm:p-8"><div className="flex items-center gap-5"><div className="grid h-20 w-20 place-items-center overflow-hidden rounded-full bg-electric text-3xl font-bold text-ink">{preview ? <img src={preview} alt="Avatar preview" className="h-full w-full object-cover"/> : profile.username[0].toUpperCase()}</div><label className="flex-1">Avatar<input type="file" accept="image/png,image/jpeg,image/webp" onChange={e => { const file = e.target.files?.[0]; if (file) { setAvatar(file); setPreview(URL.createObjectURL(file)); } }} className="field file:mr-4 file:rounded-full file:border-0 file:bg-electric file:px-3 file:py-2 file:text-xs file:font-semibold file:text-ink"/></label></div><label>Username<input name="username" required minLength={3} maxLength={40} defaultValue={profile.username} className="field"/></label><label>Bio<textarea name="bio" maxLength={500} rows={4} defaultValue={profile.bio || ""} placeholder="Tell the community about yourself..." className="field resize-none"/></label><div className="grid grid-cols-2 gap-3"><div className="rounded-xl border border-line p-4"><p className="text-xs text-zinc-500">Active listings</p><p className="mt-2 text-2xl font-semibold">{active}</p></div><div className="rounded-xl border border-line p-4"><p className="text-xs text-zinc-500">Sold listings</p><p className="mt-2 text-2xl font-semibold">{sold}</p></div></div><p className="text-sm text-zinc-500">Member since {new Date(profile.created_at).toLocaleDateString()}</p>{error && <p className="text-sm text-red-300">{error}</p>}{message && <p className="text-sm text-electric">{message}</p>}<Button disabled={saving} className="w-full">{saving ? "Saving..." : "Save profile"}</Button></form></main>; }
+import { WalletStatusCard } from "@/components/wallet-provider";
+import { normalizeWalletAddress, isValidEvmAddress, shortenAddress } from "@/lib/wallet";
+import { useAccount } from "wagmi";
+
+export default function ProfilePage() {
+  const { user, loading: authLoading } = useAuth();
+  const { address, isConnected, status } = useAccount();
+  const [walletAddress, setWalletAddress] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  useEffect(() => {
+    if (!user) return;
+    getSupabaseBrowserClient().from("profiles").select("wallet_address").eq("id", user.id).single().then(({ data, error: fetchError }) => {
+      if (!fetchError && data) setWalletAddress(data.wallet_address || null);
+    });
+  }, [user]);
+
+  async function saveWallet() {
+    if (!user) return;
+    const finalAddress = isConnected && address ? normalizeWalletAddress(address) : walletAddress;
+    if (!finalAddress) {
+      setError("No wallet connected to associate.");
+      return;
+    }
+    if (!isValidEvmAddress(finalAddress)) {
+      setError("Invalid wallet address.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    setNotice("");
+    const { error: updateError } = await getSupabaseBrowserClient().from("profiles").update({ wallet_address: finalAddress }).eq("id", user.id);
+    if (updateError) {
+      setError(updateError.message);
+      setSaving(false);
+      return;
+    }
+    setWalletAddress(finalAddress);
+    setNotice("Wallet saved to your Lootly profile.");
+    setSaving(false);
+  }
+
+  if (authLoading || !user) return <main className="mx-auto max-w-3xl px-5 py-24 text-center text-zinc-500">Loading profile...</main>;
+
+  return (
+    <main className="mx-auto max-w-3xl px-5 py-14">
+      <p className="text-xs font-bold uppercase tracking-[.2em] text-electric">Profile</p>
+      <h1 className="mt-3 text-5xl font-semibold tracking-tight">Your identity.</h1>
+      <div className="mt-10 space-y-6">
+        <WalletStatusCard />
+        <div className="rounded-2xl border border-line bg-panel p-5">
+          <p className="text-xs font-bold uppercase tracking-[.2em] text-electric">Connected Wallet</p>
+          <p className="mt-4 text-lg font-semibold">{isConnected && address ? shortenAddress(address) : "Not connected"}</p>
+          <p className="mt-2 text-sm text-zinc-500">Saved profile wallet: {walletAddress ? shortenAddress(walletAddress) : "Not saved"}</p>
+          <div className="mt-5 flex flex-wrap gap-3">
+            <button onClick={() => saveWallet()} disabled={saving || !isConnected} className="rounded-full bg-electric px-4 py-2 text-sm font-semibold text-ink disabled:opacity-50">{saving ? "Saving..." : "Save wallet"}</button>
+            <button onClick={() => { setWalletAddress(null); setNotice("Saved wallet cleared."); }} className="rounded-full border border-line px-4 py-2 text-sm text-zinc-200">Clear saved wallet</button>
+          </div>
+          {status === "disconnected" && <p className="mt-3 text-sm text-zinc-500">Connect a wallet to continue.</p>}
+        </div>
+        {error && <p className="rounded-xl border border-red-400/30 bg-red-400/10 p-4 text-sm text-red-300">{error}</p>}
+        {notice && <p className="rounded-xl border border-electric/30 bg-electric/5 p-4 text-sm text-electric">{notice}</p>}
+      </div>
+    </main>
+  );
+}

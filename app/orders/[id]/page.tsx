@@ -1,11 +1,44 @@
 "use client";
-import { useEffect,useState } from "react";
-import Link from "next/link";
-import { useParams,useRouter } from "next/navigation";
-import { useAuth } from "@/components/auth-provider";
-import { getSupabaseBrowserClient } from "@/lib/supabase/client";
-import { Button } from "@/components/layout";
-import type { Escrow,Order } from "@/lib/data";
-const steps=["Order created","Payment secured","Seller processing","Account delivered","Payment released"];
-function Badge({status}:{status:string}){return <span className="rounded-full bg-electric/10 px-3 py-1 text-xs capitalize text-electric">{status.replace("_"," ")}</span>}
-export default function OrderDetail(){const {id}=useParams<{id:string}>();const {user,loading:authLoading}=useAuth();const router=useRouter();const [order,setOrder]=useState<Order|null>(null);const [escrow,setEscrow]=useState<Escrow|null>(null);const [loading,setLoading]=useState(true);const [busy,setBusy]=useState(false);const [error,setError]=useState("");const [notice,setNotice]=useState("");async function load(){const {data,error:e}=await getSupabaseBrowserClient().from("orders").select("*, listings(*), buyer:profiles!orders_buyer_id_fkey(id,username,avatar_url,bio,created_at), seller:profiles!orders_seller_id_fkey(id,username,avatar_url,bio,created_at)").eq("id",id).single();if(e){setError("Order not found or unavailable.");setLoading(false);return;}setOrder(data as Order);const result=await getSupabaseBrowserClient().from("escrows").select("*").eq("order_id",id).maybeSingle();setEscrow(result.data as Escrow|null);setLoading(false);}useEffect(()=>{if(!authLoading&&!user){router.replace(`/login?next=/orders/${id}`);return;}if(user)load();},[user,authLoading,id]);async function rpc(name:string){setBusy(true);setError("");setNotice("");const {error:e}=await getSupabaseBrowserClient().rpc(name,{p_order_id:id});if(e)setError(e.message);else{setNotice(name==="release_order"?"Payment released to seller.":name==="fund_order"?"Funds secured in Lootly Escrow.":name==="refund_order"?"Simulated refund completed.":"Dispute opened. Funds remain locked while this transaction is under review.");await load();}setBusy(false);}if(authLoading||loading||!user)return <main className="mx-auto max-w-3xl px-5 py-24 text-center text-zinc-500">Loading order...</main>;if(!order)return <main className="mx-auto max-w-3xl px-5 py-24 text-center text-zinc-400">{error}</main>;const funded=escrow?.status==="funded",current=order.status==="completed"?4:order.status==="delivered"?3:funded?2:0;return <main className="mx-auto max-w-3xl px-5 py-14"><Link href="/orders" className="text-sm text-zinc-500 hover:text-electric">← Back to orders</Link><div className="mt-8 flex items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[.2em] text-electric">Order #{order.id.slice(0,8)}</p><h1 className="mt-3 text-4xl font-semibold">{order.listings?.title||"Listing"}</h1></div><Badge status={escrow?.status||order.status}/></div><div className="mt-8 grid gap-3 sm:grid-cols-3"><div className="rounded-xl border border-line bg-panel p-4"><p className="text-xs text-zinc-500">Amount</p><p className="mt-2 font-semibold">${order.amount_usdc} USDC</p></div><div className="rounded-xl border border-line bg-panel p-4"><p className="text-xs text-zinc-500">Buyer</p><p className="mt-2 font-semibold">{order.buyer?.username||"—"}</p></div><div className="rounded-xl border border-line bg-panel p-4"><p className="text-xs text-zinc-500">Seller</p><p className="mt-2 font-semibold">{order.seller?.username||"—"}</p></div></div><section className="mt-8 rounded-2xl border border-line bg-panel p-6"><h2 className="font-semibold">Escrow timeline</h2><div className="mt-6 space-y-4">{steps.map((step,i)=><div key={step} className={`flex items-center gap-4 ${i<=current?"text-electric":"text-zinc-600"}`}><span className="grid h-8 w-8 place-items-center rounded-full border border-current text-sm">{i<current?"✓":i+1}</span><span>{step}</span></div>)}</div><div className="mt-7 rounded-xl border border-electric/20 bg-electric/5 p-4"><p className="font-semibold text-electric">🔒 {funded?`${order.amount_usdc} USDC secured in Lootly Escrow`:escrow?.status==="released"?"Payment released to seller": "Escrow awaiting funding"}</p><p className="mt-2 text-sm text-zinc-400">Simulated only. No real funds are involved.</p></div></section>{error&&<p className="mt-6 rounded-xl border border-red-400/30 p-4 text-sm text-red-300">{error}</p>}{notice&&<p className="mt-6 rounded-xl border border-electric/30 bg-electric/5 p-4 text-sm text-electric">{notice}</p>}<div className="mt-6 flex flex-wrap gap-3">{order.status==="pending"&&order.buyer_id===user.id&&<Button disabled={busy} onClick={()=>rpc("fund_order")}>Deposit ${order.amount_usdc} USDC</Button>}{order.status==="delivered"&&order.buyer_id===user.id&&funded&&<Button disabled={busy} onClick={()=>rpc("release_order")}>Confirm & Release Payment</Button>}{order.status==="processing"&&order.buyer_id===user.id&&funded&&<button disabled={busy} onClick={()=>rpc("refund_order")} className="rounded-full border border-red-400/30 px-5 py-3 text-red-300">Cancel & refund</button>}{escrow?.status==="funded"&&(order.buyer_id===user.id||order.seller_id===user.id)&&<button disabled={busy} onClick={()=>rpc("dispute_order")} className="rounded-full border border-line px-5 py-3 text-zinc-300">Open dispute</button>}{order.status==="pending"&&order.buyer_id===user.id&&<button disabled={busy} onClick={()=>getSupabaseBrowserClient().rpc("update_order_as_buyer",{p_order_id:id,p_status:"cancelled"}).then(()=>load())} className="rounded-full border border-red-400/30 px-5 py-3 text-red-300">Cancel order</button>}</div><p className="mt-8 text-sm text-zinc-500">Seller delivery controls remain in the seller dashboard. Payments are simulated for testing.</p></main>}
+import { useEffect, useState } from "react";
+import { useAccount } from "wagmi";
+import { useConnectModal } from "@rainbow-me/rainbowkit";
+import { useDisconnect } from "wagmi";
+import { shortenAddress } from "@/lib/wallet";
+
+export default function OrderPaymentMethod() {
+  const { openConnectModal } = useConnectModal();
+  const { address, isConnected, chain } = useAccount();
+  const { disconnect } = useDisconnect();
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
+  if (!mounted) return <div className="rounded-2xl border border-line bg-panel p-5 text-zinc-500">Loading payment method…</div>;
+
+  return (
+    <section className="mt-8 rounded-2xl border border-line bg-panel p-6">
+      <p className="text-xs font-bold uppercase tracking-[.2em] text-electric">Payment Method</p>
+      <div className="mt-5 flex items-start justify-between gap-4">
+        <div>
+          <p className="text-lg font-semibold">Crypto Wallet</p>
+          {isConnected && address ? (
+            <p className="mt-2 text-sm text-zinc-300">{shortenAddress(address)}</p>
+          ) : (
+            <p className="mt-2 text-sm text-zinc-500">Not connected</p>
+          )}
+        </div>
+        {isConnected && address ? (
+          <button onClick={() => disconnect()} className="rounded-full border border-line px-4 py-2 text-sm text-zinc-200">Disconnect</button>
+        ) : (
+          <button onClick={() => openConnectModal?.()} className="rounded-full bg-electric px-4 py-2 text-sm font-semibold text-ink">Connect Wallet</button>
+        )}
+      </div>
+      {isConnected && address ? (
+        <div className="mt-4 rounded-xl border border-line bg-black/20 p-4 text-sm text-zinc-400">
+          {chain?.id === 8453 ? "Connected to Base" : "Wrong network"}
+        </div>
+      ) : (
+        <div className="mt-4 rounded-xl border border-line bg-black/20 p-4 text-sm text-zinc-400">Connect Wallet to continue</div>
+      )}
+    </section>
+  );
+}
