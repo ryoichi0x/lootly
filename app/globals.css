@@ -1,10 +1,1 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-:root { color-scheme: dark; }
-* { box-sizing: border-box; }
-body { min-width: 320px; background: #09090b; }
-button, input, select, textarea { font: inherit; }
-::selection { background: #c6f36b; color: #09090b; }
-@layer utilities { .text-balance { text-wrap: balance; } }
+@layer components { label { @apply block text-sm font-medium text-zinc-300; } .field { @apply mt-2 block w-full rounded-xl border border-line bg-black/20 px-4 py-3 text-sm text-white outline-none placeholder:text-zinc-600 focus:border-electric; } .stat { @apply rounded-2xl border border-line bg-panel p-6; } .stat p { @apply text-sm text-zinc-500; } .stat strong { @apply mt-3 block text-3xl font-semibold; } .stat small { @apply text-sm font-normal text-electric; } }
