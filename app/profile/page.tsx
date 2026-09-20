@@ -1,72 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
+import { useWalletStatus, WalletStatus } from "@/components/wallet-status";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
-import { WalletStatusCard } from "@/components/wallet-provider";
-import { normalizeWalletAddress, isValidEvmAddress, shortenAddress } from "@/lib/wallet";
-import { useAccount } from "wagmi";
-
-export default function ProfilePage() {
-  const { user, loading: authLoading } = useAuth();
-  const { address, isConnected, status } = useAccount();
-  const [walletAddress, setWalletAddress] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
-
-  useEffect(() => {
-    if (!user) return;
-    getSupabaseBrowserClient().from("profiles").select("wallet_address").eq("id", user.id).single().then(({ data, error: fetchError }) => {
-      if (!fetchError && data) setWalletAddress(data.wallet_address || null);
-    });
-  }, [user]);
-
-  async function saveWallet() {
-    if (!user) return;
-    const finalAddress = isConnected && address ? normalizeWalletAddress(address) : walletAddress;
-    if (!finalAddress) {
-      setError("No wallet connected to associate.");
-      return;
-    }
-    if (!isValidEvmAddress(finalAddress)) {
-      setError("Invalid wallet address.");
-      return;
-    }
-    setSaving(true);
-    setError("");
-    setNotice("");
-    const { error: updateError } = await getSupabaseBrowserClient().from("profiles").update({ wallet_address: finalAddress }).eq("id", user.id);
-    if (updateError) {
-      setError(updateError.message);
-      setSaving(false);
-      return;
-    }
-    setWalletAddress(finalAddress);
-    setNotice("Wallet saved to your Lootly profile.");
-    setSaving(false);
-  }
-
-  if (authLoading || !user) return <main className="mx-auto max-w-3xl px-5 py-24 text-center text-zinc-500">Loading profile...</main>;
-
-  return (
-    <main className="mx-auto max-w-3xl px-5 py-14">
-      <p className="text-xs font-bold uppercase tracking-[.2em] text-electric">Profile</p>
-      <h1 className="mt-3 text-5xl font-semibold tracking-tight">Your identity.</h1>
-      <div className="mt-10 space-y-6">
-        <WalletStatusCard />
-        <div className="rounded-2xl border border-line bg-panel p-5">
-          <p className="text-xs font-bold uppercase tracking-[.2em] text-electric">Connected Wallet</p>
-          <p className="mt-4 text-lg font-semibold">{isConnected && address ? shortenAddress(address) : "Not connected"}</p>
-          <p className="mt-2 text-sm text-zinc-500">Saved profile wallet: {walletAddress ? shortenAddress(walletAddress) : "Not saved"}</p>
-          <div className="mt-5 flex flex-wrap gap-3">
-            <button onClick={() => saveWallet()} disabled={saving || !isConnected} className="rounded-full bg-electric px-4 py-2 text-sm font-semibold text-ink disabled:opacity-50">{saving ? "Saving..." : "Save wallet"}</button>
-            <button onClick={() => { setWalletAddress(null); setNotice("Saved wallet cleared."); }} className="rounded-full border border-line px-4 py-2 text-sm text-zinc-200">Clear saved wallet</button>
-          </div>
-          {status === "disconnected" && <p className="mt-3 text-sm text-zinc-500">Connect a wallet to continue.</p>}
-        </div>
-        {error && <p className="rounded-xl border border-red-400/30 bg-red-400/10 p-4 text-sm text-red-300">{error}</p>}
-        {notice && <p className="rounded-xl border border-electric/30 bg-electric/5 p-4 text-sm text-electric">{notice}</p>}
-      </div>
-    </main>
-  );
-}
+import { shortenAddress } from "@/lib/wallet";
+export default function ProfilePage() { const { user, loading: authLoading } = useAuth(); const wallet = useWalletStatus(); const [saved, setSaved] = useState<string | null>(null); const [saving, setSaving] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState(""); useEffect(() => { if (user) getSupabaseBrowserClient().from("profiles").select("wallet_address").eq("id", user.id).single().then(({ data }) => setSaved(data?.wallet_address || null)); }, [user]); async function associate() { setSaving(true); setError(""); try { await wallet.associate(); setSaved(wallet.normalized); setMessage("Wallet associated with your Lootly profile."); } catch (e) { setError(e instanceof Error ? e.message : "Could not save wallet."); } setSaving(false); } async function clear() { if (!user || !saved || !window.confirm("Remove this wallet association from your Lootly profile?")) return; setSaving(true); const { error: e } = await getSupabaseBrowserClient().from("profiles").update({ wallet_address: null }).eq("id", user.id); if (e) setError(e.message); else { setSaved(null); setMessage("Wallet association removed."); } setSaving(false); } if (authLoading || !user) return <main className="mx-auto max-w-3xl px-5 py-24 text-center text-zinc-500">Loading profile...</main>; const isDifferent = !!wallet.normalized && !!saved && wallet.normalized !== saved; return <main className="mx-auto max-w-3xl px-5 py-14"><p className="text-xs font-bold uppercase tracking-[.2em] text-electric">Profile</p><h1 className="mt-3 text-5xl font-semibold tracking-tight">Your wallet identity.</h1><div className="mt-10 space-y-6"><WalletStatus/><section className="rounded-2xl border border-line bg-panel p-6"><p className="text-xs font-bold uppercase tracking-[.2em] text-electric">Lootly profile association</p><p className="mt-4 text-sm text-zinc-500">Saved wallet</p><p className="mt-1 font-semibold">{saved ? shortenAddress(saved) : "Not associated"}</p>{saved && <button onClick={() => navigator.clipboard.writeText(saved)} className="mt-2 text-xs text-electric">Copy full address</button>}{isDifferent && <p className="mt-5 rounded-xl border border-amber-400/30 bg-amber-400/10 p-4 text-sm text-amber-200">A different wallet is connected. Associating it will replace the saved wallet only after your explicit confirmation.</p>}<div className="mt-5 flex flex-wrap gap-3">{wallet.isConnected && <button disabled={saving} onClick={() => { if (isDifferent && !window.confirm("Replace the saved Lootly wallet with this connected wallet?")) return; associate(); }} className="rounded-full bg-electric px-4 py-2 text-sm font-semibold text-ink">{isDifferent ? "Change associated wallet" : "Associate wallet"}</button>}{saved && <button disabled={saving} onClick={clear} className="rounded-full border border-line px-4 py-2 text-sm">Disconnect association</button>}</div></section>{message && <p className="rounded-xl border border-electric/30 bg-electric/5 p-4 text-sm text-electric">{message}</p>}{error && <p className="rounded-xl border border-red-400/30 p-4 text-sm text-red-300">{error}</p>}</div></main>; }
