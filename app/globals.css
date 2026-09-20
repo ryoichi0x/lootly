@@ -1,0 +1,10 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body { min-width: 320px; background: #09090b; }
+button, input, select, textarea { font: inherit; }
+::selection { background: #c6f36b; color: #09090b; }
+@layer utilities { .text-balance { text-wrap: balance; } }
