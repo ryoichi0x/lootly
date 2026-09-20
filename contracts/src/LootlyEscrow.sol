@@ -7,39 +7,27 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 /// @title LootlyEscrow
-/// @notice Holds the configured USDC token for one marketplace order at a time.
-/// @dev Lootly order UUIDs must be converted off-chain to bytes32 before calling this contract.
+/// @notice Holds only the immutable, network-specific USDC token for marketplace orders.
+/// @dev Lootly UUIDs are converted off-chain to deterministic bytes32 identifiers.
 contract LootlyEscrow is ReentrancyGuard, Ownable {
     using SafeERC20 for IERC20;
 
     enum State { AWAITING_DEPOSIT, FUNDED, RELEASED, REFUNDED, DISPUTED }
-
-    struct Escrow {
-        bytes32 orderId;
-        address buyer;
-        address seller;
-        uint256 amount;
-        State state;
-    }
+    struct Escrow { bytes32 orderId; address buyer; address seller; uint256 amount; State state; }
 
     IERC20 public immutable usdc;
     mapping(bytes32 => Escrow) private escrows;
 
-    error ZeroAddress();
-    error ZeroAmount();
-    error DuplicateOrder(bytes32 orderId);
-    error EscrowNotFound(bytes32 orderId);
-    error Unauthorized();
-    error InvalidState(State expected, State actual);
-    error InvalidParticipants();
-    error UnsupportedToken();
+    error ZeroAddress(); error ZeroAmount(); error ZeroOrderId(); error DuplicateOrder(bytes32 orderId);
+    error EscrowNotFound(bytes32 orderId); error Unauthorized();
+    error InvalidState(State expected, State actual); error InvalidParticipants(); error UnsupportedToken();
 
     event EscrowCreated(bytes32 indexed orderId, address indexed buyer, address indexed seller, uint256 amount);
     event EscrowFunded(bytes32 indexed orderId, address indexed buyer, uint256 amount);
     event EscrowReleased(bytes32 indexed orderId, address indexed seller, uint256 amount);
     event EscrowRefunded(bytes32 indexed orderId, address indexed buyer, uint256 amount);
     event EscrowDisputed(bytes32 indexed orderId, address indexed openedBy);
-    event DisputeResolved(bytes32 indexed orderId, bool released, address indexed resolver);
+    event DisputeResolved(bytes32 indexed orderId, bool released, address indexed resolver, uint256 amount);
     event UnsupportedTokenRecovered(address indexed token, address indexed recipient, uint256 amount);
 
     constructor(address usdcToken, address initialOwner) Ownable(initialOwner) {
@@ -48,7 +36,7 @@ contract LootlyEscrow is ReentrancyGuard, Ownable {
     }
 
     function createEscrow(bytes32 orderId, address buyer, address seller, uint256 amount) external {
-        if (orderId == bytes32(0)) revert ZeroAmount();
+        if (orderId == bytes32(0)) revert ZeroOrderId();
         if (buyer == address(0) || seller == address(0) || buyer == seller) revert InvalidParticipants();
         if (amount == 0) revert ZeroAmount();
         if (escrows[orderId].buyer != address(0)) revert DuplicateOrder(orderId);
@@ -75,6 +63,7 @@ contract LootlyEscrow is ReentrancyGuard, Ownable {
         emit EscrowReleased(orderId, escrow.seller, escrow.amount);
     }
 
+    // Buyer refunds remain intentionally permissive in Step 7B; delivery/timeout policy is a later design decision.
     function refund(bytes32 orderId) external nonReentrant {
         Escrow storage escrow = _escrow(orderId);
         if (msg.sender != escrow.buyer) revert Unauthorized();
@@ -92,24 +81,21 @@ contract LootlyEscrow is ReentrancyGuard, Ownable {
         emit EscrowDisputed(orderId, msg.sender);
     }
 
-    /// @notice Resolves only an already-disputed escrow; owner cannot redirect funds arbitrarily.
     function resolveDispute(bytes32 orderId, bool releaseToSeller) external onlyOwner nonReentrant {
         Escrow storage escrow = _escrow(orderId);
         if (escrow.state != State.DISPUTED) revert InvalidState(State.DISPUTED, escrow.state);
         escrow.state = releaseToSeller ? State.RELEASED : State.REFUNDED;
         if (releaseToSeller) usdc.safeTransfer(escrow.seller, escrow.amount);
         else usdc.safeTransfer(escrow.buyer, escrow.amount);
-        emit DisputeResolved(orderId, releaseToSeller, msg.sender);
+        emit DisputeResolved(orderId, releaseToSeller, msg.sender, escrow.amount);
     }
 
-    function getEscrow(bytes32 orderId) external view returns (Escrow memory) {
-        return _escrow(orderId);
-    }
+    function getEscrow(bytes32 orderId) external view returns (Escrow memory) { return _escrow(orderId); }
 
-    /// @dev Only unsupported tokens can be recovered; configured USDC can never be swept.
     function recoverUnsupportedToken(address token, address recipient, uint256 amount) external onlyOwner nonReentrant {
         if (token == address(usdc)) revert UnsupportedToken();
-        if (recipient == address(0) || amount == 0) revert ZeroAmount();
+        if (recipient == address(0)) revert ZeroAddress();
+        if (amount == 0) revert ZeroAmount();
         IERC20(token).safeTransfer(recipient, amount);
         emit UnsupportedTokenRecovered(token, recipient, amount);
     }
